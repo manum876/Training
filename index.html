@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <title>Программа · Programa</title>
 <style>
   :root{
@@ -12,7 +12,8 @@
     --text:#f4f4f5; --muted:#a1a1aa; --muted2:#71717a; --dim:#52525b;
   }
   *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
-  body{margin:0; background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+  html,body{margin:0; width:100%; max-width:100%; overflow-x:hidden; overscroll-behavior-x:none;}
+  body{background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
   .wrap{max-width:560px; margin:0 auto; padding:0 16px 96px;}
   .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;}
   header.top{position:sticky; top:0; z-index:20; background:#09090bf2; backdrop-filter:blur(8px); border-bottom:1px solid var(--border);}
@@ -91,6 +92,10 @@
   .ex-type.priority{background:var(--amber); color:#09090b;}
   .ex-type.support{background:var(--gray); color:#d4d4d8;}
   .ex-meta{font-size:11.5px; color:var(--muted2); margin-top:3px; font-family:ui-monospace,monospace;}
+  .rest-timer{display:inline-flex; align-items:center; justify-content:center; gap:6px; margin-top:7px; padding:6px 9px; min-width:86px; border:1px solid var(--border); border-radius:7px; background:#27272a; color:var(--muted); font-family:ui-monospace,monospace; font-size:12px; font-weight:800; cursor:pointer; -webkit-user-select:none; user-select:none; touch-action:manipulation;}
+  .rest-timer:hover{border-color:var(--amber); color:var(--amber);}
+  .rest-timer.running{border-color:var(--amber); background:var(--amber-bg); color:var(--amber);}
+  .rest-timer.finished{border-color:var(--emerald); background:var(--emerald-bg); color:var(--emerald);}
   .ex-note{font-size:11.5px; color:var(--muted2); font-style:italic; margin-top:4px;}
   .ex-inputs{display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px; margin-top:8px;}
   .ex-inputs input{padding:6px 8px; font-size:12px; margin-top:0;}
@@ -144,6 +149,8 @@ const UI = {
     warmupNote:"Разминка 5-7 мин + суставная разминка. В фазах с трицепсом/дельтами/грудью — обязательно лёгкие резиновые разгибания локтя.",
     stopNote:"Острая боль в локте — снизь вес на 30% и сократи амплитуду в этот же день.",
     exercisesOf:"упражнений отмечено",
+    restStart:"Начать отдых", restRunning:"Отдых", restDone:"Отдых завершён",
+    notificationTitle:"Время отдыха вышло", notificationBody:"Можно начинать следующий подход."
   },
   es: {
     appTitle:"PROGRAMA", appSub:"16 semanas · ganancia muscular",
@@ -165,6 +172,8 @@ const UI = {
     warmupNote:"Calentamiento 5-7 min + movilidad articular. En fases con tríceps/deltoides/pecho: extensiones de codo con banda ligera obligatorias.",
     stopNote:"Dolor agudo en el codo — reduce el peso un 30% y acorta el rango ese mismo día.",
     exercisesOf:"ejercicios marcados",
+    restStart:"Iniciar descanso", restRunning:"Descanso", restDone:"Descanso terminado",
+    notificationTitle:"Fin del descanso", notificationBody:"Ya puedes empezar la siguiente serie."
   },
 };
 const MONTHS = {
@@ -569,6 +578,57 @@ function renderHome(){
   `;
 }
 
+const restTimers = {};
+
+function getRestSeconds(rest){
+  const nums = String(rest).match(/\d+(?:[.,]\d+)?/g);
+  if(!nums || !nums.length) return 0;
+  return Math.max(0, Math.floor(parseFloat(nums[0].replace(",", "."))));
+}
+
+async function requestNotificationPermission(){
+  if(!("Notification" in window)) return false;
+  if(Notification.permission === "granted") return true;
+  if(Notification.permission === "denied") return false;
+  try{return (await Notification.requestPermission()) === "granted";}catch(e){return false;}
+}
+
+function sendRestNotification(){
+  if("Notification" in window && Notification.permission === "granted") {
+    try{new Notification(UI[lang].notificationTitle,{body:UI[lang].notificationBody,tag:"ptracker-rest-finished"});}catch(e){}
+  }
+}
+
+function clearRestTimer(idx){
+  const state=restTimers[idx];
+  if(state && state.interval) clearInterval(state.interval);
+  delete restTimers[idx];
+}
+
+function startRestTimer(idx,seconds){
+  if(!seconds) return;
+  clearRestTimer(idx);
+  const btn=document.querySelector(`.rest-timer[data-idx="${idx}"]`);
+  if(!btn) return;
+  const state={remaining:seconds,interval:null};
+  restTimers[idx]=state;
+  btn.classList.add("running"); btn.classList.remove("finished");
+  const update=()=>{
+    if(!restTimers[idx]) return;
+    const m=Math.floor(state.remaining/60), s=state.remaining%60;
+    btn.textContent=`⏱ ${m}:${String(s).padStart(2,"0")}`;
+  };
+  update();
+  state.interval=setInterval(()=>{
+    state.remaining--;
+    if(state.remaining<=0){
+      clearRestTimer(idx); btn.classList.remove("running"); btn.classList.add("finished");
+      btn.textContent=`✓ ${UI[lang].restDone}`; sendRestNotification(); return;
+    }
+    update();
+  },1000);
+}
+
 function renderSession(){
   const t = UI[lang];
   const week = activeWeek, day = activeDay;
@@ -588,9 +648,10 @@ function renderSession(){
             <span class="ex-type ${r.type}">${r.type==="priority"?t.priority:t.support}</span>
           </div>
           <div class="ex-meta">${r.setsReps} · ${t.colTempo} ${r.tempo} · RPE ${r.rpe} · ${t.colRest} ${r.rest}с</div>
+          ${getRestSeconds(r.rest)>0?`<button type="button" class="rest-timer" data-idx="${i}" data-seconds="${getRestSeconds(r.rest)}">⏱ ${getRestSeconds(r.rest)}s</button>`:""}
           ${r.note[lang]?`<div class="ex-note">${esc(r.note[lang])}</div>`:""}
           <div class="ex-inputs">
-            <input type="number" inputmode="decimal" placeholder="${t.weightUsed}" data-idx="${i}" data-field="weight" value="${esc(e.weight)}">
+            <input type="number" inputmode="decimal" step="0.1" min="0" placeholder="${t.weightUsed}" data-idx="${i}" data-field="weight" value="${esc(e.weight)}">
             <input type="text" inputmode="numeric" placeholder="${t.repsDone}" data-idx="${i}" data-field="reps" value="${esc(e.reps)}">
             <input type="text" inputmode="numeric" placeholder="${t.rpeActual}" data-idx="${i}" data-field="rpe" value="${esc(e.rpe)}">
           </div>
@@ -603,7 +664,6 @@ function renderSession(){
   return `
     <div class="sess-crumb"><span>${t.week} ${week}</span><span>·</span><span>${t.session} ${day}</span></div>
     <h2 class="sess-heading">${esc(title)}</h2>
-    <button class="complete-btn ${done?"done":""}" id="completeBtn">${done?"✓ ":""}${done?t.complete:t.markComplete}</button>
     <p class="warmup-note">${t.warmupNote}</p>
     <div class="ex-list">${exHtml}</div>
     <div class="elbow-block">
@@ -616,6 +676,7 @@ function renderSession(){
       <span class="count" id="exCount">${doneCount}/${rows.length} ${t.exercisesOf}</span>
       <button class="save-btn" id="saveLogBtn">${t.saveLog}</button>
     </div>
+    <button class="complete-btn ${done?"done":""}" id="completeBtn">${done?"✓ ":""}${done?t.complete:t.markComplete}</button>
   `;
 }
 
@@ -713,6 +774,14 @@ function mountSession(){
     inp.oninput = ()=>{
       const idx = parseInt(inp.dataset.idx,10);
       sessionEntries[idx][inp.dataset.field] = inp.value;
+    };
+  });
+
+  document.querySelectorAll(".rest-timer").forEach(btn=>{
+    btn.onclick=async()=>{
+      const idx=parseInt(btn.dataset.idx,10), seconds=parseInt(btn.dataset.seconds,10);
+      if(!restTimers[idx]) await requestNotificationPermission();
+      startRestTimer(idx,seconds);
     };
   });
 
