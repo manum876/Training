@@ -579,6 +579,27 @@ function renderHome(){
 }
 
 const restTimers = {};
+const REST_TIMER_STORAGE = "ptracker_rest_timers";
+
+function restTimerKey(idx){
+  return `w${activeWeek}-d${activeDay}-e${idx}`;
+}
+
+function loadSavedRestTimers(){
+  try{return JSON.parse(localStorage.getItem(REST_TIMER_STORAGE) || "{}");}catch(e){return {};}
+}
+
+function saveRestTimer(key,endAt){
+  const timers=loadSavedRestTimers();
+  timers[key]=endAt;
+  localStorage.setItem(REST_TIMER_STORAGE,JSON.stringify(timers));
+}
+
+function removeSavedRestTimer(key){
+  const timers=loadSavedRestTimers();
+  delete timers[key];
+  localStorage.setItem(REST_TIMER_STORAGE,JSON.stringify(timers));
+}
 
 function getRestSeconds(rest){
   const nums = String(rest).match(/\d+(?:[.,]\d+)?/g);
@@ -599,34 +620,43 @@ function sendRestNotification(){
   }
 }
 
-function clearRestTimer(idx){
-  const state=restTimers[idx];
+function clearRestTimer(key,removeSaved=true){
+  const state=restTimers[key];
   if(state && state.interval) clearInterval(state.interval);
-  delete restTimers[idx];
+  delete restTimers[key];
+  if(removeSaved) removeSavedRestTimer(key);
 }
 
-function startRestTimer(idx,seconds){
+function startRestTimer(idx,seconds,endAt){
   if(!seconds) return;
-  clearRestTimer(idx);
+  const key=restTimerKey(idx);
+  clearRestTimer(key,false);
   const btn=document.querySelector(`.rest-timer[data-idx="${idx}"]`);
   if(!btn) return;
-  const state={remaining:seconds,interval:null};
-  restTimers[idx]=state;
+  const state={endAt:endAt || Date.now()+(seconds*1000),interval:null};
+  restTimers[key]=state;
+  saveRestTimer(key,state.endAt);
   btn.classList.add("running"); btn.classList.remove("finished");
   const update=()=>{
-    if(!restTimers[idx]) return;
-    const m=Math.floor(state.remaining/60), s=state.remaining%60;
+    if(!restTimers[key]) return;
+    const remaining=Math.max(0,Math.ceil((state.endAt-Date.now())/1000));
+    if(remaining<=0){
+      clearRestTimer(key); btn.classList.remove("running"); btn.classList.add("finished");
+      btn.textContent=`✓ ${UI[lang].restDone}`; sendRestNotification(); return;
+    }
+    const m=Math.floor(remaining/60), s=remaining%60;
     btn.textContent=`⏱ ${m}:${String(s).padStart(2,"0")}`;
   };
   update();
-  state.interval=setInterval(()=>{
-    state.remaining--;
-    if(state.remaining<=0){
-      clearRestTimer(idx); btn.classList.remove("running"); btn.classList.add("finished");
-      btn.textContent=`✓ ${UI[lang].restDone}`; sendRestNotification(); return;
-    }
-    update();
-  },1000);
+  if(restTimers[key]) state.interval=setInterval(update,250);
+}
+
+function restoreRestTimers(){
+  const timers=loadSavedRestTimers();
+  document.querySelectorAll(".rest-timer").forEach(btn=>{
+    const idx=parseInt(btn.dataset.idx,10), key=restTimerKey(idx), endAt=timers[key];
+    if(endAt) startRestTimer(idx,Math.max(1,Math.ceil((endAt-Date.now())/1000)),endAt);
+  });
 }
 
 function renderSession(){
@@ -651,7 +681,7 @@ function renderSession(){
           ${getRestSeconds(r.rest)>0?`<button type="button" class="rest-timer" data-idx="${i}" data-seconds="${getRestSeconds(r.rest)}">⏱ ${getRestSeconds(r.rest)}s</button>`:""}
           ${r.note[lang]?`<div class="ex-note">${esc(r.note[lang])}</div>`:""}
           <div class="ex-inputs">
-            <input type="number" inputmode="decimal" step="0.1" min="0" placeholder="${t.weightUsed}" data-idx="${i}" data-field="weight" value="${esc(e.weight)}">
+            <input type="text" inputmode="decimal" pattern="[0-9]*[.,]?[0-9]*" placeholder="${t.weightUsed}" data-idx="${i}" data-field="weight" value="${esc(e.weight)}">
             <input type="text" inputmode="numeric" placeholder="${t.repsDone}" data-idx="${i}" data-field="reps" value="${esc(e.reps)}">
             <input type="text" inputmode="numeric" placeholder="${t.rpeActual}" data-idx="${i}" data-field="rpe" value="${esc(e.rpe)}">
           </div>
@@ -780,10 +810,12 @@ function mountSession(){
   document.querySelectorAll(".rest-timer").forEach(btn=>{
     btn.onclick=async()=>{
       const idx=parseInt(btn.dataset.idx,10), seconds=parseInt(btn.dataset.seconds,10);
-      if(!restTimers[idx]) await requestNotificationPermission();
+      if(!restTimers[restTimerKey(idx)]) await requestNotificationPermission();
       startRestTimer(idx,seconds);
     };
   });
+
+  restoreRestTimers();
 
   const elbowRange = document.getElementById("elbowRange");
   elbowRange.oninput = ()=>{
