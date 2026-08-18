@@ -104,9 +104,12 @@
   input[type=range]{width:100%; margin-top:6px; accent-color:var(--amber);}
   .elbow-val{text-align:center; font-family:ui-monospace,monospace; font-weight:800; color:var(--amber); font-size:14px; margin-top:2px;}
   .stop-note{font-size:12px; color:#fb7185cc; line-height:1.5; margin-bottom:16px;}
-  .save-row{display:flex; align-items:center; justify-content:space-between; gap:12px;}
-  .save-row .count{font-size:12px; color:var(--muted2); font-family:ui-monospace,monospace;}
-  .save-btn{flex:1; max-width:260px; background:var(--amber); color:#09090b; font-weight:800; font-size:14px; border:none; border-radius:10px; padding:13px; cursor:pointer;}
+  .session-actions{display:flex; align-items:stretch; gap:8px; margin-top:10px;}
+  .session-actions .count{font-size:12px; color:var(--muted2); font-family:ui-monospace,monospace; align-self:center; margin-right:auto;}
+  .share-btn,.complete-btn{font-weight:800; font-size:13px; border:none; border-radius:10px; padding:12px 14px; cursor:pointer; touch-action:manipulation;}
+  .share-btn{background:#27272a; color:var(--text); border:1px solid var(--border);}
+  .share-btn:hover{border-color:var(--amber); color:var(--amber);}
+  .complete-btn{margin:0;}
 
   /* info view */
   .info-head{display:flex; align-items:center; gap:10px; margin:8px 0 16px;}
@@ -146,6 +149,7 @@ const UI = {
     complete:"Тренировка выполнена", markComplete:"Отметить как выполненную",
     elbowPain:"Боль в локте (0-10)",
     saveLog:"Сохранить запись", savedLog:"Сохранено ✓",
+    shareWorkout:"Поделиться",
     warmupNote:"Разминка 5-7 мин + суставная разминка. В фазах с трицепсом/дельтами/грудью — обязательно лёгкие резиновые разгибания локтя.",
     stopNote:"Острая боль в локте — снизь вес на 30% и сократи амплитуду в этот же день.",
     exercisesOf:"упражнений отмечено",
@@ -169,6 +173,7 @@ const UI = {
     complete:"Entreno completado", markComplete:"Marcar como completado",
     elbowPain:"Dolor de codo (0-10)",
     saveLog:"Guardar registro", savedLog:"Guardado ✓",
+    shareWorkout:"Compartir",
     warmupNote:"Calentamiento 5-7 min + movilidad articular. En fases con tríceps/deltoides/pecho: extensiones de codo con banda ligera obligatorias.",
     stopNote:"Dolor agudo en el codo — reduce el peso un 30% y acorta el rango ese mismo día.",
     exercisesOf:"ejercicios marcados",
@@ -579,27 +584,6 @@ function renderHome(){
 }
 
 const restTimers = {};
-const REST_TIMER_STORAGE = "ptracker_rest_timers";
-
-function restTimerKey(idx){
-  return `w${activeWeek}-d${activeDay}-e${idx}`;
-}
-
-function loadSavedRestTimers(){
-  try{return JSON.parse(localStorage.getItem(REST_TIMER_STORAGE) || "{}");}catch(e){return {};}
-}
-
-function saveRestTimer(key,endAt){
-  const timers=loadSavedRestTimers();
-  timers[key]=endAt;
-  localStorage.setItem(REST_TIMER_STORAGE,JSON.stringify(timers));
-}
-
-function removeSavedRestTimer(key){
-  const timers=loadSavedRestTimers();
-  delete timers[key];
-  localStorage.setItem(REST_TIMER_STORAGE,JSON.stringify(timers));
-}
 
 function getRestSeconds(rest){
   const nums = String(rest).match(/\d+(?:[.,]\d+)?/g);
@@ -620,43 +604,118 @@ function sendRestNotification(){
   }
 }
 
-function clearRestTimer(key,removeSaved=true){
-  const state=restTimers[key];
+function clearRestTimer(idx){
+  const state=restTimers[idx];
   if(state && state.interval) clearInterval(state.interval);
-  delete restTimers[key];
-  if(removeSaved) removeSavedRestTimer(key);
+  delete restTimers[idx];
 }
 
-function startRestTimer(idx,seconds,endAt){
+function startRestTimer(idx,seconds){
   if(!seconds) return;
-  const key=restTimerKey(idx);
-  clearRestTimer(key,false);
+  clearRestTimer(idx);
   const btn=document.querySelector(`.rest-timer[data-idx="${idx}"]`);
   if(!btn) return;
-  const state={endAt:endAt || Date.now()+(seconds*1000),interval:null};
-  restTimers[key]=state;
-  saveRestTimer(key,state.endAt);
+  const state={remaining:seconds,interval:null};
+  restTimers[idx]=state;
   btn.classList.add("running"); btn.classList.remove("finished");
   const update=()=>{
-    if(!restTimers[key]) return;
-    const remaining=Math.max(0,Math.ceil((state.endAt-Date.now())/1000));
-    if(remaining<=0){
-      clearRestTimer(key); btn.classList.remove("running"); btn.classList.add("finished");
-      btn.textContent=`✓ ${UI[lang].restDone}`; sendRestNotification(); return;
-    }
-    const m=Math.floor(remaining/60), s=remaining%60;
+    if(!restTimers[idx]) return;
+    const m=Math.floor(state.remaining/60), s=state.remaining%60;
     btn.textContent=`⏱ ${m}:${String(s).padStart(2,"0")}`;
   };
   update();
-  if(restTimers[key]) state.interval=setInterval(update,250);
+  state.interval=setInterval(()=>{
+    state.remaining--;
+    if(state.remaining<=0){
+      clearRestTimer(idx); btn.classList.remove("running"); btn.classList.add("finished");
+      btn.textContent=`✓ ${UI[lang].restDone}`; sendRestNotification(); return;
+    }
+    update();
+  },1000);
 }
 
-function restoreRestTimers(){
-  const timers=loadSavedRestTimers();
-  document.querySelectorAll(".rest-timer").forEach(btn=>{
-    const idx=parseInt(btn.dataset.idx,10), key=restTimerKey(idx), endAt=timers[key];
-    if(endAt) startRestTimer(idx,Math.max(1,Math.ceil((endAt-Date.now())/1000)),endAt);
+
+function saveSessionField(idx,field,value){
+  if(!sessionEntries[idx]) sessionEntries[idx]={done:false,weight:"",reps:"",rpe:""};
+  sessionEntries[idx][field]=value;
+  saveSessionLog(activeWeek,activeDay);
+}
+
+function parseSets(value){
+  const m=String(value||"").match(/\d+/);
+  return m ? m[0] : "";
+}
+
+function parsePrescribedReps(value){
+  const str=String(value||"");
+  const m=str.match(/[×x]\s*([0-9]+(?:-[0-9]+)?)/i);
+  return m ? m[1] : "";
+}
+
+async function shareWorkoutImage(){
+  const t=UI[lang];
+  const rows=rowsFor(activeWeek,activeDay);
+  const title=titleFor(activeWeek)[lang];
+  const W=750, H=1334;
+  const canvas=document.createElement("canvas");
+  canvas.width=W; canvas.height=H;
+  const ctx=canvas.getContext("2d");
+  ctx.fillStyle="#09090b"; ctx.fillRect(0,0,W,H);
+  const pad=48;
+  let y=62;
+  ctx.fillStyle="#f59e0b"; ctx.font="800 18px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif";
+  ctx.fillText(t.appTitle || "PROGRAMA",pad,y);
+  y+=42;
+  ctx.fillStyle="#f4f4f5"; ctx.font="900 30px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif";
+  ctx.fillText(`${t.week} ${activeWeek} · ${t.session} ${activeDay}`,pad,y);
+  y+=42;
+  ctx.fillStyle="#d4d4d8"; ctx.font="700 21px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif";
+  const titleLines=[];
+  const words=String(title).split(/\s+/); let line="";
+  words.forEach(word=>{ const test=line?line+" "+word:word; if(ctx.measureText(test).width>W-pad*2 && line){titleLines.push(line); line=word;}else line=test; });
+  if(line) titleLines.push(line);
+  titleLines.forEach(l=>{ctx.fillText(l,pad,y); y+=29;});
+  y+=20;
+  ctx.strokeStyle="#27272a"; ctx.lineWidth=2; ctx.beginPath(); ctx.moveTo(pad,y); ctx.lineTo(W-pad,y); ctx.stroke(); y+=34;
+  ctx.fillStyle="#a1a1aa"; ctx.font="800 15px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif";
+  ctx.fillText(lang==="es"?"EJERCICIO":"УПРАЖНЕНИЕ",pad,y);
+  ctx.fillText(lang==="es"?"PESO":"ВЕС",430,y);
+  ctx.fillText(lang==="es"?"SERIES":"ПОДХОДЫ",525,y);
+  ctx.fillText(lang==="es"?"REPS":"ПОВТОРЫ",640,y);
+  y+=18;
+  ctx.strokeStyle="#27272a"; ctx.beginPath(); ctx.moveTo(pad,y); ctx.lineTo(W-pad,y); ctx.stroke(); y+=28;
+
+  const drawWrapped=(text,x,maxWidth,font,lineHeight)=>{
+    ctx.font=font; const words=String(text).split(/\s+/); let lines=[]; let line="";
+    words.forEach(word=>{const test=line?line+" "+word:word;if(ctx.measureText(test).width>maxWidth&&line){lines.push(line);line=word;}else line=test;}); if(line) lines.push(line);
+    lines.forEach(l=>{ctx.fillText(l,x,y);y+=lineHeight;}); return lines.length;
+  };
+  rows.forEach((r,i)=>{
+    const e=sessionEntries[i]||{};
+    const ex=String(r.ex[lang]);
+    const weight=e.weight!==undefined&&e.weight!==""?String(e.weight):"—";
+    const reps=e.reps!==undefined&&e.reps!==""?String(e.reps):"—";
+    const sets=parseSets(r.setsReps)||"—";
+    const rowHeight=Math.max(58, Math.ceil(ctx.measureText(ex).width/360)*23+24);
+    if(y+rowHeight>H-60) return;
+    ctx.fillStyle="#f4f4f5"; ctx.font="700 16px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif";
+    drawWrapped(ex,pad,350,"700 16px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif",22);
+    const baseY=y-((Math.max(1,Math.ceil(ctx.measureText(ex).width/350))>1)?22:0);
+    ctx.fillStyle="#f4f4f5"; ctx.font="800 16px ui-monospace,SFMono-Regular,Menlo,monospace";
+    ctx.fillText(weight,430,baseY); ctx.fillText(sets,535,baseY); ctx.fillText(reps,650,baseY);
+    y=Math.max(y,baseY+18)+22;
+    ctx.strokeStyle="#18181b"; ctx.beginPath(); ctx.moveTo(pad,y-10); ctx.lineTo(W-pad,y-10); ctx.stroke();
   });
+  ctx.fillStyle="#52525b"; ctx.font="600 12px -apple-system,BlinkMacSystemFont,Segoe UI,sans-serif";
+  ctx.fillText("Program tracker",pad,H-28);
+
+  const blob=await new Promise(resolve=>canvas.toBlob(resolve,"image/png",0.92));
+  if(!blob) return;
+  const file=new File([blob],`entreno-${activeWeek}-${activeDay}.png`,{type:"image/png"});
+  if(navigator.share && navigator.canShare && navigator.canShare({files:[file]})){
+    try{ await navigator.share({title:String(title),text:`${t.week} ${activeWeek} · ${t.session} ${activeDay}`,files:[file]}); return; }catch(e){ if(e && e.name==="AbortError") return; }
+  }
+  const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=file.name; a.click(); setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
 
 function renderSession(){
@@ -681,7 +740,7 @@ function renderSession(){
           ${getRestSeconds(r.rest)>0?`<button type="button" class="rest-timer" data-idx="${i}" data-seconds="${getRestSeconds(r.rest)}">⏱ ${getRestSeconds(r.rest)}s</button>`:""}
           ${r.note[lang]?`<div class="ex-note">${esc(r.note[lang])}</div>`:""}
           <div class="ex-inputs">
-            <input type="text" inputmode="decimal" pattern="[0-9]*[.,]?[0-9]*" placeholder="${t.weightUsed}" data-idx="${i}" data-field="weight" value="${esc(e.weight)}">
+            <input type="number" inputmode="decimal" step="0.1" min="0" placeholder="${t.weightUsed}" data-idx="${i}" data-field="weight" value="${esc(e.weight)}">
             <input type="text" inputmode="numeric" placeholder="${t.repsDone}" data-idx="${i}" data-field="reps" value="${esc(e.reps)}">
             <input type="text" inputmode="numeric" placeholder="${t.rpeActual}" data-idx="${i}" data-field="rpe" value="${esc(e.rpe)}">
           </div>
@@ -702,11 +761,11 @@ function renderSession(){
       <div class="elbow-val" id="elbowVal">${sessionElbow||0}</div>
     </div>
     <p class="stop-note">${t.stopNote}</p>
-    <div class="save-row">
+    <div class="session-actions">
       <span class="count" id="exCount">${doneCount}/${rows.length} ${t.exercisesOf}</span>
-      <button class="save-btn" id="saveLogBtn">${t.saveLog}</button>
+      <button type="button" class="share-btn" id="shareWorkoutBtn">↗ ${t.shareWorkout}</button>
+      <button type="button" class="complete-btn ${done?"done":""}" id="completeBtn">${done?"✓ ":""}${done?t.complete:t.markComplete}</button>
     </div>
-    <button class="complete-btn ${done?"done":""}" id="completeBtn">${done?"✓ ":""}${done?t.complete:t.markComplete}</button>
   `;
 }
 
@@ -792,6 +851,7 @@ function mountSession(){
     btn.onclick = ()=>{
       const idx = parseInt(btn.dataset.idx,10);
       sessionEntries[idx].done = !sessionEntries[idx].done;
+      saveSessionLog(week, day);
       const card = document.querySelector(`.ex-card[data-idx="${idx}"]`);
       card.classList.toggle("done", sessionEntries[idx].done);
       btn.classList.toggle("done", sessionEntries[idx].done);
@@ -804,31 +864,26 @@ function mountSession(){
     inp.oninput = ()=>{
       const idx = parseInt(inp.dataset.idx,10);
       sessionEntries[idx][inp.dataset.field] = inp.value;
+      saveSessionLog(week, day);
     };
   });
 
   document.querySelectorAll(".rest-timer").forEach(btn=>{
     btn.onclick=async()=>{
       const idx=parseInt(btn.dataset.idx,10), seconds=parseInt(btn.dataset.seconds,10);
-      if(!restTimers[restTimerKey(idx)]) await requestNotificationPermission();
+      if(!restTimers[idx]) await requestNotificationPermission();
       startRestTimer(idx,seconds);
     };
   });
 
-  restoreRestTimers();
-
   const elbowRange = document.getElementById("elbowRange");
   elbowRange.oninput = ()=>{
     sessionElbow = elbowRange.value;
+    saveSessionLog(week, day);
     document.getElementById("elbowVal").textContent = elbowRange.value;
   };
 
-  document.getElementById("saveLogBtn").onclick = ()=>{
-    saveSessionLog(week, day);
-    const btn = document.getElementById("saveLogBtn");
-    btn.textContent = t.savedLog;
-    setTimeout(()=>{ if(document.getElementById("saveLogBtn")) btn.textContent = t.saveLog; }, 1800);
-  };
+  document.getElementById("shareWorkoutBtn").onclick = shareWorkoutImage;
 }
 
 // ---------------------------------------------------------------------------
